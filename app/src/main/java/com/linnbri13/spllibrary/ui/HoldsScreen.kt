@@ -311,17 +311,46 @@ private fun HoldCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (hold.isReady && !hold.expiryDate.isNullOrBlank()) {
+                if ((hold.isReady || hold.isInTransit) && !hold.expiryDate.isNullOrBlank()) {
                     Text(
-                        text = "Pick up by ${hold.expiryDate}",
+                        text = "Pick up by ${formatHoldDate(hold.expiryDate)}",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(0xFF1B7A43)
                     )
                 }
+                if (!hold.placedDate.isNullOrBlank() && hold.expiryDate != hold.placedDate) {
+                    Text(
+                        text = "Placed ${formatHoldDate(hold.placedDate)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
+}
+
+
+private fun formatHoldDate(raw: String?): String {
+    val text = raw?.trim().orEmpty()
+    if (text.isBlank()) return ""
+    val patterns = listOf(
+        "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ssXXX", "yyyy-MM-dd'T'HH:mm:ssXXXXX",
+        "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd", "MM/dd/yyyy"
+    )
+    for (pattern in patterns) {
+        try {
+            val sdf = java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
+            sdf.isLenient = false
+            val parsed = sdf.parse(text)
+            if (parsed != null) {
+                val out = java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault())
+                return out.format(parsed)
+            }
+        } catch (_: Exception) { }
+    }
+    return text
 }
 
 @Composable
