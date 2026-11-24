@@ -1,5 +1,6 @@
 package com.linnbri13.spllibrary.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,12 +42,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.linnbri13.spllibrary.data.HoldItem
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HoldsScreen(
     state: SplUiState,
@@ -129,8 +134,13 @@ fun HoldsScreen(
             }
         }
 
-        when {
-            state.isLoadingHolds && state.holds.isEmpty() -> {
+        PullToRefreshBox(
+            isRefreshing = state.isLoadingHolds && state.holds.isNotEmpty(),
+            onRefresh = { vm.refreshHolds() },
+            modifier = Modifier.fillMaxSize()
+        ) {
+            when {
+                state.isLoadingHolds && state.holds.isEmpty() -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
@@ -191,6 +201,7 @@ fun HoldsScreen(
                 }
             }
         }
+        }
     }
 
     val pendingCancel = confirmCancelHold
@@ -227,8 +238,17 @@ private fun HoldCard(
     isCanceling: Boolean,
     onCancelClick: () -> Unit
 ) {
+    val uriHandler = LocalUriHandler.current
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (hold.metadataId.isNotBlank()) {
+                    Modifier.clickable { runCatching { uriHandler.openUri(hold.catalogUrl) } }
+                } else {
+                    Modifier
+                }
+            ),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(
@@ -313,15 +333,15 @@ private fun HoldCard(
                 }
                 if ((hold.isReady || hold.isInTransit) && !hold.expiryDate.isNullOrBlank()) {
                     Text(
-                        text = "Pick up by ${formatHoldDate(hold.expiryDate)}",
+                        text = "Pick up by ${formatLibraryDate(hold.expiryDate)}",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF1B7A43)
+                        color = MaterialTheme.colorScheme.tertiary
                     )
                 }
                 if (!hold.placedDate.isNullOrBlank() && hold.expiryDate != hold.placedDate) {
                     Text(
-                        text = "Placed ${formatHoldDate(hold.placedDate)}",
+                        text = "Placed ${formatLibraryDate(hold.placedDate)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -331,27 +351,6 @@ private fun HoldCard(
     }
 }
 
-
-private fun formatHoldDate(raw: String?): String {
-    val text = raw?.trim().orEmpty()
-    if (text.isBlank()) return ""
-    val patterns = listOf(
-        "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ssXXX", "yyyy-MM-dd'T'HH:mm:ssXXXXX",
-        "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd", "MM/dd/yyyy"
-    )
-    for (pattern in patterns) {
-        try {
-            val sdf = java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
-            sdf.isLenient = false
-            val parsed = sdf.parse(text)
-            if (parsed != null) {
-                val out = java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault())
-                return out.format(parsed)
-            }
-        } catch (_: Exception) { }
-    }
-    return text
-}
 
 @Composable
 fun SignInPrompt(title: String, subtitle: String, onGoToAccount: () -> Unit) {

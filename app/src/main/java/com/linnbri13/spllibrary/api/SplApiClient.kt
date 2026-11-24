@@ -14,6 +14,8 @@ import com.linnbri13.spllibrary.data.SessionStore
 import com.linnbri13.spllibrary.data.SortOption
 import com.linnbri13.spllibrary.data.formatCodeToLabel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -88,6 +90,7 @@ class SplApiClient(private val sessionStore: SessionStore) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val cookieJar = MemoryCookieJar()
+    private val authMutex = Mutex()
 
     private val http = OkHttpClient.Builder()
         .cookieJar(cookieJar)
@@ -100,7 +103,17 @@ class SplApiClient(private val sessionStore: SessionStore) {
     private val userAgent =
         "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Fold) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
+    fun clearCookies() {
+        cookieJar.clear()
+    }
+
     suspend fun login(username: String, pin: String): Long = withContext(Dispatchers.IO) {
+        authMutex.withLock {
+            loginLocked(username, pin)
+        }
+    }
+
+    private suspend fun loginLocked(username: String, pin: String): Long {
         cookieJar.clear()
         val loginUrl = "$catalogOrigin/user/login?destination=x"
         val getReq = Request.Builder()
@@ -152,7 +165,19 @@ class SplApiClient(private val sessionStore: SessionStore) {
         sessionStore.username = username.trim()
         sessionStore.pin = pin.trim()
         sessionStore.saveSession(accessToken, sessionId, accountId)
-        accountId
+        return accountId
+    }
+
+    private suspend fun refreshSessionIfNeeded(failedToken: String?) {
+        authMutex.withLock {
+            if (!sessionStore.accessToken.isNullOrBlank() && sessionStore.accessToken != failedToken) {
+                return@withLock
+            }
+            if (!sessionStore.hasCredentials) {
+                throw SplApiException("SPL session expired. Please sign in again.")
+            }
+            loginLocked(sessionStore.username, sessionStore.pin)
+        }
     }
 
     suspend fun getBranches(): List<Branch> = withContext(Dispatchers.IO) {
@@ -330,6 +355,13 @@ class SplApiClient(private val sessionStore: SessionStore) {
             }
 
             val root = gatewayMutation("POST", url, payload.toString())
+            val failures = root["failures"]?.obj
+            if (failures != null && failures.isNotEmpty()) {
+                val msg = failures.values.firstOrNull()?.let { el ->
+                    (el as? JsonPrimitive)?.contentOrNull ?: el.obj?.str("message")
+                } ?: "Could not place hold"
+                throw SplApiException(msg)
+            }
             val holdsObj = root["entities"]?.obj?.get("holds")?.obj
             val firstEntry = holdsObj?.entries?.firstOrNull()
             val holdObj = firstEntry?.value?.obj
@@ -423,10 +455,13 @@ class SplApiClient(private val sessionStore: SessionStore) {
 
     private suspend fun ensureAuthenticated() {
         if (sessionStore.isLoggedIn) return
-        if (sessionStore.hasCredentials) {
-            login(sessionStore.username, sessionStore.pin)
-        } else {
-            throw SplApiException("Please sign in on the Account tab first.")
+        authMutex.withLock {
+            if (sessionStore.isLoggedIn) return@withLock
+            if (sessionStore.hasCredentials) {
+                loginLocked(sessionStore.username, sessionStore.pin)
+            } else {
+                throw SplApiException("Please sign in on the Account tab first.")
+            }
         }
     }
 
@@ -437,13 +472,14 @@ class SplApiClient(private val sessionStore: SessionStore) {
             .header("Accept", "application/json")
             .get()
 
+        val usedToken = sessionStore.accessToken
         if (requireAuth) {
             attachAuthHeaders(builder)
         }
 
         val (code, body) = executeCall(builder.build())
         if (requireAuth && retryOnAuth && (code == 401 || code == 403) && sessionStore.hasCredentials) {
-            login(sessionStore.username, sessionStore.pin)
+            refreshSessionIfNeeded(usedToken)
             return gatewayGet(url, requireAuth = true, retryOnAuth = false)
         }
 
@@ -468,11 +504,12 @@ class SplApiClient(private val sessionStore: SessionStore) {
             .header("Referer", "$catalogOrigin/")
             .method(method, jsonBody.toRequestBody(jsonMediaType))
 
+        val usedToken = sessionStore.accessToken
         attachAuthHeaders(builder)
 
         val (code, body) = executeCall(builder.build())
         if (retryOnAuth && (code == 401 || code == 403) && sessionStore.hasCredentials) {
-            login(sessionStore.username, sessionStore.pin)
+            refreshSessionIfNeeded(usedToken)
             return gatewayMutation(method, url, jsonBody, retryOnAuth = false)
         }
 

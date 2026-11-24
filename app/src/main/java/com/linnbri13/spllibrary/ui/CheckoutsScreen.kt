@@ -1,5 +1,7 @@
 package com.linnbri13.spllibrary.ui
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,23 +24,25 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.linnbri13.spllibrary.data.CheckoutItem
-import java.time.LocalDate
-import java.time.temporal.ChronoUnit
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CheckoutsScreen(
     state: SplUiState,
@@ -85,64 +89,70 @@ fun CheckoutsScreen(
             return
         }
 
-        when {
-            state.isLoadingCheckouts && state.checkouts.isEmpty() -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            }
-
-            state.checkoutsError != null && state.checkouts.isEmpty() -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(state.checkoutsError, color = MaterialTheme.colorScheme.error)
-                        Spacer(Modifier.height(12.dp))
-                        Button(onClick = { vm.refreshCheckouts() }) { Text("Retry") }
+        PullToRefreshBox(
+            isRefreshing = state.isLoadingCheckouts && state.checkouts.isNotEmpty(),
+            onRefresh = { vm.refreshCheckouts() },
+            modifier = Modifier.fillMaxSize()
+        ) {
+            when {
+                state.isLoadingCheckouts && state.checkouts.isEmpty() -> {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
                     }
                 }
-            }
 
-            state.checkouts.isEmpty() -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            Icons.Filled.Book,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = "No items currently checked out.",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                state.checkoutsError != null && state.checkouts.isEmpty() -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(state.checkoutsError, color = MaterialTheme.colorScheme.error)
+                            Spacer(Modifier.height(12.dp))
+                            Button(onClick = { vm.refreshCheckouts() }) { Text("Retry") }
+                        }
                     }
                 }
-            }
 
-            else -> {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(state.checkouts, key = { it.checkoutId }) { checkout ->
-                        CheckoutCard(
-                            checkout = checkout,
-                            isRenewing = checkout.checkoutId in state.renewingCheckoutIds,
-                            onRenew = { vm.renewCheckout(checkout) }
-                        )
+                state.checkouts.isEmpty() -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Filled.Book,
+                                contentDescription = null,
+                                modifier = Modifier.size(48.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "No items currently checked out.",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(state.checkouts, key = { it.checkoutId }) { checkout ->
+                            CheckoutCard(
+                                checkout = checkout,
+                                isRenewing = checkout.checkoutId in state.renewingCheckoutIds,
+                                onRenew = { vm.renewCheckout(checkout) }
+                            )
+                        }
                     }
                 }
             }
@@ -156,10 +166,27 @@ private fun CheckoutCard(
     isRenewing: Boolean,
     onRenew: () -> Unit
 ) {
-    val dueInfo = parseDueInfo(checkout.dueDate)
+    val uriHandler = LocalUriHandler.current
+    val dueStatus = computeDueStatus(checkout.dueDate)
+    val isDark = isSystemInDarkTheme()
+    val (bgColor, fgColor) = when (dueStatus.urgency) {
+        DueUrgency.OVERDUE -> Color(0xFFC62828) to Color.White
+        DueUrgency.TODAY -> Color(0xFFEF6C00) to Color.White
+        DueUrgency.SOON -> if (isDark) Color(0xFF4E2A00) to Color(0xFFFFCC80) else Color(0xFFFFF3E0) to Color(0xFFE65100)
+        DueUrgency.NORMAL -> if (isDark) Color(0xFF0E3A36) to Color(0xFF80CBC4) else Color(0xFFE0F2F1) to Color(0xFF004D40)
+        DueUrgency.UNKNOWN -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
+    }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (!checkout.catalogUrl.isNullOrBlank()) {
+                    Modifier.clickable { runCatching { uriHandler.openUri(checkout.catalogUrl) } }
+                } else {
+                    Modifier
+                }
+            ),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(
@@ -196,9 +223,9 @@ private fun CheckoutCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     PillBadge(
-                        text = dueInfo.label,
-                        containerColor = dueInfo.bgColor,
-                        contentColor = dueInfo.fgColor
+                        text = dueStatus.label,
+                        containerColor = bgColor,
+                        contentColor = fgColor
                     )
                     PillBadge(
                         text = checkout.formatLabel,
@@ -237,26 +264,5 @@ private fun CheckoutCard(
                 }
             }
         }
-    }
-}
-
-private data class DueDisplay(val label: String, val bgColor: Color, val fgColor: Color)
-
-private fun parseDueInfo(dueDate: String?): DueDisplay {
-    if (dueDate.isNullOrBlank()) {
-        return DueDisplay("Due date unavailable", Color(0xFFE0E0E0), Color(0xFF333333))
-    }
-    val datePart = dueDate.take(10)
-    return try {
-        val parsed = LocalDate.parse(datePart)
-        val days = ChronoUnit.DAYS.between(LocalDate.now(), parsed)
-        when {
-            days < 0 -> DueDisplay("Overdue (${-days}d) • $datePart", Color(0xFFC62828), Color.White)
-            days == 0L -> DueDisplay("Due TODAY • $datePart", Color(0xFFEF6C00), Color.White)
-            days <= 3L -> DueDisplay("Due in ${days}d • $datePart", Color(0xFFFFF3E0), Color(0xFFE65100))
-            else -> DueDisplay("Due $datePart (${days}d)", Color(0xFFE0F2F1), Color(0xFF004D40))
-        }
-    } catch (_: Exception) {
-        DueDisplay("Due $datePart", Color(0xFFE0F2F1), Color(0xFF004D40))
     }
 }

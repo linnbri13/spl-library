@@ -149,6 +149,9 @@ private fun SplApp(vm: SplViewModel = viewModel()) {
             subtitle = "Saved for future 1-touch holds. You can change it anytime on the Account tab.",
             branches = state.branches,
             selectedCode = state.defaultBranchCode,
+            isLoading = state.isLoadingBranches,
+            errorMessage = state.branchesError,
+            onRetry = { vm.loadBranches() },
             onSelect = { vm.selectDefaultBranch(it) },
             onDismiss = { vm.dismissBranchPicker() }
         )

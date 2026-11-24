@@ -15,12 +15,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -34,6 +35,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,7 +43,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -52,6 +56,17 @@ fun AccountScreen(state: SplUiState, vm: SplViewModel) {
     var username by rememberSaveable { mutableStateOf(state.savedUsername) }
     var pin by rememberSaveable { mutableStateOf("") }
     var showBranchDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(state.isLoggedIn) {
+        if (state.isLoggedIn) pin = ""
+    }
+
+    val context = LocalContext.current
+    val versionName = remember(context) {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull() ?: "1.1"
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Surface(tonalElevation = 2.dp) {
@@ -99,7 +114,7 @@ fun AccountScreen(state: SplUiState, vm: SplViewModel) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         OutlinedButton(onClick = { vm.logout() }) {
-                            Icon(Icons.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
                             Text("Sign Out")
                         }
@@ -109,6 +124,7 @@ fun AccountScreen(state: SplUiState, vm: SplViewModel) {
                             onValueChange = { username = it },
                             label = { Text("Library Card # or Username") },
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                             modifier = Modifier.fillMaxWidth()
                         )
                         OutlinedTextField(
@@ -117,7 +133,8 @@ fun AccountScreen(state: SplUiState, vm: SplViewModel) {
                             label = { Text("PIN") },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = { if (!state.isLoggingIn) vm.login(username, pin) }),
                             modifier = Modifier.fillMaxWidth()
                         )
                         if (state.loginError != null) {
@@ -190,7 +207,7 @@ fun AccountScreen(state: SplUiState, vm: SplViewModel) {
             }
 
             Text(
-                text = "SPL Library v1.0 • Talks directly to seattle.bibliocommons.com & gateway.bibliocommons.com",
+                text = "SPL Library v$versionName • Talks directly to seattle.bibliocommons.com & gateway.bibliocommons.com",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -203,6 +220,9 @@ fun AccountScreen(state: SplUiState, vm: SplViewModel) {
             subtitle = "Used automatically whenever you tap 1-Touch Hold.",
             branches = state.branches,
             selectedCode = state.defaultBranchCode,
+            isLoading = state.isLoadingBranches,
+            errorMessage = state.branchesError,
+            onRetry = { vm.loadBranches() },
             onSelect = {
                 vm.selectDefaultBranch(it)
                 showBranchDialog = false
@@ -219,7 +239,10 @@ fun BranchPickerDialog(
     branches: List<Branch>,
     selectedCode: String?,
     onSelect: (Branch) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    isLoading: Boolean = false,
+    errorMessage: String? = null,
+    onRetry: (() -> Unit)? = null
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -233,13 +256,34 @@ fun BranchPickerDialog(
                 )
                 Spacer(Modifier.height(10.dp))
                 if (branches.isEmpty()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 16.dp),
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    if (errorMessage != null && !isLoading) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = errorMessage,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            if (onRetry != null) {
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedButton(onClick = onRetry) {
+                                    Text("Retry")
+                                }
+                            }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                        }
                     }
                 } else {
                     LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {

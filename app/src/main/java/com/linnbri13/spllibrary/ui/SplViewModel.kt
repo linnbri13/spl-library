@@ -13,6 +13,8 @@ import com.linnbri13.spllibrary.data.HoldItem
 import com.linnbri13.spllibrary.data.NewlyAcquiredFilter
 import com.linnbri13.spllibrary.data.SessionStore
 import com.linnbri13.spllibrary.data.SortOption
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,6 +35,8 @@ data class SplUiState(
     val isLoggingIn: Boolean = false,
     val loginError: String? = null,
     val branches: List<Branch> = emptyList(),
+    val isLoadingBranches: Boolean = false,
+    val branchesError: String? = null,
     val defaultBranchCode: String? = null,
     val defaultBranchName: String? = null,
 
@@ -54,6 +58,7 @@ data class SplUiState(
     val selectedBook: BookResult? = null,
     val copyAvailability: List<CopyAvailability> = emptyList(),
     val isLoadingAvailability: Boolean = false,
+    val availabilityError: String? = null,
 
     // One-touch holds
     val placingHoldBibIds: Set<String> = emptySet(),
@@ -82,6 +87,8 @@ data class SplUiState(
 class SplViewModel(application: Application) : AndroidViewModel(application) {
     private val sessionStore = SessionStore(application.applicationContext)
     private val api = SplApiClient(sessionStore)
+    private var searchJob: Job? = null
+    private var availabilityJob: Job? = null
 
     private val _uiState = MutableStateFlow(
         SplUiState(
@@ -106,12 +113,13 @@ class SplViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadBranches() {
+        _uiState.update { it.copy(isLoadingBranches = true, branchesError = null) }
         viewModelScope.launch {
             try {
                 val branches = api.getBranches()
-                _uiState.update { it.copy(branches = branches) }
-            } catch (_: Exception) {
-                // Non-fatal; will retry if needed
+                _uiState.update { it.copy(branches = branches, isLoadingBranches = false) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoadingBranches = false, branchesError = e.message ?: "Could not load SPL branches") }
             }
         }
     }
@@ -148,6 +156,7 @@ class SplViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logout() {
+        api.clearCookies()
         sessionStore.clearSession()
         _uiState.update {
             it.copy(
@@ -156,6 +165,8 @@ class SplViewModel(application: Application) : AndroidViewModel(application) {
                 holds = emptyList(),
                 checkouts = emptyList(),
                 heldBibIds = emptySet(),
+                physicalHoldsUsed = null,
+                physicalHoldsLimit = null,
                 holdsError = null,
                 checkoutsError = null,
                 snackbarMessage = "Signed out"
@@ -236,7 +247,13 @@ class SplViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        viewModelScope.launch {
+        if (page == 1) {
+            searchJob?.cancel()
+        } else if (state.isLoadingMore || state.isSearching) {
+            return
+        }
+
+        searchJob = viewModelScope.launch {
             _uiState.update {
                 if (page == 1) {
                     it.copy(isSearching = true, searchError = null, hasSearched = true)
@@ -253,7 +270,7 @@ class SplViewModel(application: Application) : AndroidViewModel(application) {
                     page = page
                 )
                 _uiState.update { cur ->
-                    val merged = if (page == 1) result.items else cur.searchResults + result.items
+                    val merged = if (page == 1) result.items.distinctBy { it.metadataId } else (cur.searchResults + result.items).distinctBy { it.metadataId }
                     cur.copy(
                         searchResults = merged,
                         searchTotalCount = result.totalCount,
@@ -264,12 +281,15 @@ class SplViewModel(application: Application) : AndroidViewModel(application) {
                         searchError = null
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
                         isSearching = false,
                         isLoadingMore = false,
-                        searchError = e.message ?: "Search failed"
+                        searchError = if (page == 1) (e.message ?: "Search failed") else null,
+                        snackbarMessage = if (page > 1) (e.message ?: "Could not load more results") else it.snackbarMessage
                     )
                 }
             }
@@ -277,27 +297,40 @@ class SplViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openBookDetail(book: BookResult) {
+        availabilityJob?.cancel()
         _uiState.update {
             it.copy(
                 selectedBook = book,
                 copyAvailability = emptyList(),
-                isLoadingAvailability = book.isPhysical
+                isLoadingAvailability = book.isPhysical,
+                availabilityError = null
             )
         }
         if (book.isPhysical) {
-            viewModelScope.launch {
+            availabilityJob = viewModelScope.launch {
                 try {
                     val copies = api.getAvailability(book.metadataId)
-                    _uiState.update { it.copy(copyAvailability = copies, isLoadingAvailability = false) }
-                } catch (_: Exception) {
-                    _uiState.update { it.copy(isLoadingAvailability = false) }
+                    _uiState.update { cur ->
+                        if (cur.selectedBook?.metadataId == book.metadataId) {
+                            cur.copy(copyAvailability = copies, isLoadingAvailability = false)
+                        } else cur
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    _uiState.update { cur ->
+                        if (cur.selectedBook?.metadataId == book.metadataId) {
+                            cur.copy(isLoadingAvailability = false, availabilityError = e.message ?: "Could not load branch copies")
+                        } else cur
+                    }
                 }
             }
         }
     }
 
     fun closeBookDetail() {
-        _uiState.update { it.copy(selectedBook = null, copyAvailability = emptyList()) }
+        availabilityJob?.cancel()
+        _uiState.update { it.copy(selectedBook = null, copyAvailability = emptyList(), isLoadingAvailability = false, availabilityError = null) }
     }
 
     fun placeOneTouchHold(book: BookResult) {
@@ -393,13 +426,20 @@ class SplViewModel(application: Application) : AndroidViewModel(application) {
                 api.cancelHold(hold.holdId, hold.metadataId)
                 _uiState.update { cur ->
                     val remaining = cur.holds.filterNot { it.holdId == hold.holdId }
+                    val newUsed = if (hold.isPhysical && cur.physicalHoldsUsed != null) {
+                        (cur.physicalHoldsUsed - 1).coerceAtLeast(0)
+                    } else {
+                        cur.physicalHoldsUsed
+                    }
                     cur.copy(
                         holds = remaining,
                         heldBibIds = remaining.map { it.metadataId }.toSet(),
+                        physicalHoldsUsed = newUsed,
                         cancelingHoldIds = cur.cancelingHoldIds - hold.holdId,
                         snackbarMessage = "Canceled hold for \"${hold.title}\""
                     )
                 }
+                refreshHolds(silent = true)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(

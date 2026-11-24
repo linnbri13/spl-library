@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -53,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -181,7 +183,7 @@ fun SearchScreen(state: SplUiState, vm: SplViewModel) {
                 }
             }
 
-            state.searchError != null -> {
+            state.searchError != null && state.searchResults.isEmpty() -> {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -380,7 +382,7 @@ private fun BookSearchCard(
                     text = availText,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Medium,
-                    color = if (isAvail) Color(0xFF1B7A43) else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (isAvail) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 Spacer(Modifier.height(8.dp))
@@ -434,6 +436,7 @@ private fun BookDetailSheet(
 ) {
     val isPlacing = book.metadataId in state.placingHoldBibIds
     val isHeld = book.metadataId in state.heldBibIds
+    val uriHandler = LocalUriHandler.current
 
     Column(
         modifier = Modifier
@@ -478,6 +481,16 @@ private fun BookDetailSheet(
             Spacer(Modifier.height(14.dp))
         }
 
+        OutlinedButton(
+            onClick = { runCatching { uriHandler.openUri(book.catalogUrl) } },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Open in SPL Catalog")
+        }
+        Spacer(Modifier.height(14.dp))
+
         if (!book.description.isNullOrBlank()) {
             Text("Summary", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(4.dp))
@@ -492,6 +505,18 @@ private fun BookDetailSheet(
             Spacer(Modifier.height(6.dp))
             if (state.isLoadingAvailability) {
                 CircularProgressIndicator(modifier = Modifier.size(24.dp))
+            } else if (!state.isLoadingAvailability && state.availabilityError != null) {
+                Text(
+                    text = state.availabilityError,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = buildAvailabilitySummary(book),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             } else if (state.copyAvailability.isEmpty()) {
                 Text(
                     text = buildAvailabilitySummary(book),
@@ -517,7 +542,7 @@ private fun BookDetailSheet(
                         Text(
                             text = copy.status.replace('_', ' '),
                             style = MaterialTheme.typography.labelMedium,
-                            color = if (avail) Color(0xFF1B7A43) else MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (avail) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
